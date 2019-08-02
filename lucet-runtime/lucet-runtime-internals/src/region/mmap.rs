@@ -11,6 +11,10 @@ use nix::sys::mman::{madvise, mmap, munmap, MapFlags, MmapAdvise, ProtFlags};
 use std::ptr;
 use std::sync::{Arc, Mutex, Weak};
 
+use libc::{off_t, size_t, ssize_t};
+use std::convert::TryFrom;
+use std::os::unix::io::RawFd;
+
 /// A [`Region`](trait.Region.html) backed by `mmap`.
 pub struct MmapRegion {
     capacity: usize,
@@ -224,6 +228,59 @@ impl RegionCreate for MmapRegion {
     }
 }
 
+#[allow(unused_must_use)]
+unsafe fn mmap_aligned(
+    addr: *mut c_void,
+    length: size_t,
+    prot: ProtFlags,
+    flags: MapFlags,
+    fd: RawFd,
+    offset: off_t,
+    align_bits: size_t,
+    align_offset: ssize_t,
+) -> Result<*mut c_void, Error> {
+    let padding = (1 as usize) << align_bits;
+    let request_size = length + padding;
+
+    let ret = mmap(addr, request_size, prot, flags, fd, offset)?;
+    let unrounded = ret as usize;
+
+    let rounded_temp = (unrounded + (padding - 1)) & !(padding - 1);
+    let rounded = if align_offset < 0 {
+        rounded_temp - usize::try_from(-align_offset).unwrap()
+    } else {
+        rounded_temp + usize::try_from(align_offset).unwrap()
+    };
+
+    //Sanity check
+    if rounded < unrounded || (rounded + (length - 1)) > (unrounded + (request_size - 1)) {
+        munmap(ret, request_size);
+        return Err(Error::Unsupported("Could not align memory".to_string()));
+    }
+
+    {
+        let unused_front = rounded - unrounded;
+        if unused_front != 0 {
+            if munmap(unrounded as *mut c_void, unused_front).is_err() {
+                munmap(ret, request_size);
+                return Err(Error::Unsupported("Could not align memory".to_string()));
+            }
+        }
+    }
+
+    {
+        let unused_back = (unrounded + (request_size - 1)) - (rounded + (length - 1));
+        if unused_back != 0 {
+            if munmap((rounded + length) as *mut c_void, unused_back).is_err() {
+                munmap(ret, request_size);
+                return Err(Error::Unsupported("Could not align memory".to_string()));
+            }
+        }
+    }
+
+    return Ok(rounded as *mut c_void);
+}
+
 impl MmapRegion {
     /// Create a new `MmapRegion` that can support a given number instances, each subject to the
     /// same runtime limits.
@@ -255,13 +312,15 @@ impl MmapRegion {
     fn create_slot(region: &Arc<MmapRegion>) -> Result<Slot, Error> {
         // get the chunk of virtual memory that the `Slot` will manage
         let mem = unsafe {
-            mmap(
+            mmap_aligned(
                 ptr::null_mut(),
                 region.limits.total_memory_size(),
                 ProtFlags::PROT_NONE,
                 MapFlags::MAP_ANON | MapFlags::MAP_PRIVATE,
                 0,
                 0,
+                32,                                 /* align to 32 bits */
+                -(instance_heap_offset() as isize), /* put the stuff before the "heap" prior to alignment */
             )?
         };
 

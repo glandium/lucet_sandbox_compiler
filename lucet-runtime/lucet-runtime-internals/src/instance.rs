@@ -551,7 +551,7 @@ impl Instance {
     }
 
     /// Run a function in guest context at the given entrypoint.
-    fn run_func(&mut self, func: FunctionHandle, args: &[Val]) -> Result<UntypedRetVal, Error> {
+    pub fn run_func(&mut self, func: FunctionHandle, args: &[Val]) -> Result<UntypedRetVal, Error> {
         lucet_ensure!(
             self.state.is_ready() || (self.state.is_fault() && !self.state.is_fatal()),
             "instance must be ready or non-fatally faulted"
