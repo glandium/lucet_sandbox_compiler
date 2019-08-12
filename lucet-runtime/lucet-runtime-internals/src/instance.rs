@@ -551,7 +551,7 @@ impl Instance {
     }
 
     /// Run a function in guest context at the given entrypoint.
-    pub fn run_func(&mut self, func: FunctionHandle, args: &[Val]) -> Result<UntypedRetVal, Error> {
+    fn run_func(&mut self, func: FunctionHandle, args: &[Val]) -> Result<UntypedRetVal, Error> {
         lucet_ensure!(
             self.state.is_ready() || (self.state.is_fault() && !self.state.is_fatal()),
             "instance must be ready or non-fatally faulted"
@@ -621,6 +621,89 @@ impl Instance {
 
         CURRENT_INSTANCE.with(|current_instance| {
             *current_instance.borrow_mut() = None;
+        });
+
+        // Sandbox has jumped back to the host process, indicating it has either:
+        //
+        // * trapped, or called hostcall_error: state tag changed to something other than `Running`
+        // * function body returned: set state back to `Ready` with return value
+
+        match &self.state {
+            State::Running => {
+                let retval = self.ctx.get_untyped_retval();
+                self.state = State::Ready { retval };
+                Ok(retval)
+            }
+            State::Terminated { details, .. } => Err(Error::RuntimeTerminated(details.clone())),
+            State::Fault { .. } => {
+                // Sandbox is no longer runnable. It's unsafe to determine all error details in the signal
+                // handler, so we fill in extra details here.
+                self.populate_fault_detail()?;
+                if let State::Fault { ref details, .. } = self.state {
+                    if details.fatal {
+                        // Some errors indicate that the guest is not functioning correctly or that
+                        // the loaded code violated some assumption, so bail out via the fatal
+                        // handler.
+
+                        // Run the C-style fatal handler, if it exists.
+                        self.c_fatal_handler
+                            .map(|h| unsafe { h(self as *mut Instance) });
+
+                        // If there is no C-style fatal handler, or if it (erroneously) returns,
+                        // call the Rust handler that we know will not return
+                        (self.fatal_handler)(self)
+                    } else {
+                        // leave the full fault details in the instance state, and return the
+                        // higher-level info to the user
+                        Err(Error::RuntimeFault(details.clone()))
+                    }
+                } else {
+                    panic!("state remains Fault after populate_fault_detail()")
+                }
+            }
+            State::Ready { .. } => {
+                panic!("instance in Ready state after returning from guest context")
+            }
+        }
+    }
+
+    /// Run a function in guest context at the given entrypoint. No checks are performed on signature or args.
+    pub fn unsafe_run_func_fast(&mut self, func_ptr: FunctionPointer, args: &[Val]) -> Result<UntypedRetVal, Error> {
+
+        self.entrypoint = Some(func_ptr);
+
+        let mut args_with_vmctx = vec![Val::from(self.alloc.slot().heap)];
+        args_with_vmctx.extend_from_slice(args);
+
+        HOST_CTX.with(|host_ctx| {
+            Context::init(
+                unsafe { self.alloc.stack_u64_mut() },
+                unsafe { &mut *host_ctx.get() },
+                &mut self.ctx,
+                func_ptr,
+                &args_with_vmctx,
+            )
+        })?;
+
+        self.state = State::Running;
+
+        let mut prev_instance = None;
+        CURRENT_INSTANCE.with(|current_instance| {
+            let mut current_instance = current_instance.borrow_mut();
+            prev_instance = *current_instance;
+            // safety: `self` is not null if we are in this function
+            *current_instance = Some(unsafe { NonNull::new_unchecked(self) });
+        });
+
+        HOST_CTX.with(|host_ctx| {
+            // Save the current context into `host_ctx`, and jump to the guest context. The
+            // lucet context is linked to host_ctx, so it will return here after it finishes,
+            // successfully or otherwise.
+            unsafe { Context::swap(&mut *host_ctx.get(), &mut self.ctx) };
+        });
+
+        CURRENT_INSTANCE.with(|current_instance| {
+            *current_instance.borrow_mut() = prev_instance;
         });
 
         // Sandbox has jumped back to the host process, indicating it has either:
