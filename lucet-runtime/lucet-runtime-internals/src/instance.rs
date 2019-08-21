@@ -670,21 +670,58 @@ impl Instance {
     /// Run a function in guest context at the given entrypoint. No checks are performed on signature or args.
     pub fn unsafe_run_func_fast(&mut self, func_ptr: FunctionPointer, args: &[Val]) -> Result<UntypedRetVal, Error> {
 
+        let prev_entrypoint = self.entrypoint;
         self.entrypoint = Some(func_ptr);
 
         let mut args_with_vmctx = vec![Val::from(self.alloc.slot().heap)];
         args_with_vmctx.extend_from_slice(args);
 
-        HOST_CTX.with(|host_ctx| {
+        let re_entrant = match &self.state {
+            State::Running => true,
+            _ => false
+        };
+
+        let saved_host_ctx = HOST_CTX.with(|host_ctx| {
+            let chosen_stack_loc;
+
+            if re_entrant {
+                let curr_stack_ptr = unsafe { Context::get_current_stack_pointer() };
+                // Add some padding for safety
+                let padded_curr_stack_ptr = curr_stack_ptr - 2048;
+
+                let stack_slice = unsafe { self.alloc.stack_mut() };
+                let stack_ptr = stack_slice.as_ptr() as u64;
+
+                assert!(padded_curr_stack_ptr >= stack_ptr);
+
+                let mut rem_stack_len = ((padded_curr_stack_ptr - stack_ptr) / 8) as usize;
+                // align to 8
+                if rem_stack_len % 8 != 0 {
+                    rem_stack_len += 8 - rem_stack_len % 8;
+                }
+
+                let computed_stack_loc = unsafe { std::slice::from_raw_parts_mut(
+                    stack_slice.as_ptr() as *mut u64,
+                    rem_stack_len,
+                )};
+
+                chosen_stack_loc = computed_stack_loc;
+            } else {
+                chosen_stack_loc = unsafe { self.alloc.stack_u64_mut() };
+            }
+
+            let host_ctx_copy = unsafe { (*host_ctx.get()).clone() };
+
             Context::init(
-                unsafe { self.alloc.stack_u64_mut() },
+                chosen_stack_loc,
                 unsafe { &mut *host_ctx.get() },
                 &mut self.ctx,
                 func_ptr,
                 &args_with_vmctx,
-            )
+            ).map(|_| host_ctx_copy)
         })?;
 
+        let prev_state = self.state.clone();
         self.state = State::Running;
 
         let mut prev_instance = None;
@@ -702,9 +739,18 @@ impl Instance {
             unsafe { Context::swap(&mut *host_ctx.get(), &mut self.ctx) };
         });
 
+        if re_entrant {
+            HOST_CTX.with(|host_ctx| {
+                let host_ctx_ref = unsafe { &mut *host_ctx.get() };
+                *host_ctx_ref = saved_host_ctx;
+            });
+        }
+
         CURRENT_INSTANCE.with(|current_instance| {
             *current_instance.borrow_mut() = prev_instance;
         });
+
+        self.entrypoint = prev_entrypoint;
 
         // Sandbox has jumped back to the host process, indicating it has either:
         //
@@ -714,7 +760,11 @@ impl Instance {
         match &self.state {
             State::Running => {
                 let retval = self.ctx.get_untyped_retval();
-                self.state = State::Ready { retval };
+                if re_entrant {
+                    self.state = prev_state;
+                } else {
+                    self.state = State::Ready { retval };
+                }
                 Ok(retval)
             }
             State::Terminated { details, .. } => Err(Error::RuntimeTerminated(details.clone())),
@@ -778,6 +828,7 @@ impl Instance {
     }
 }
 
+#[derive(Clone)]
 pub enum State {
     Ready {
         retval: UntypedRetVal,
