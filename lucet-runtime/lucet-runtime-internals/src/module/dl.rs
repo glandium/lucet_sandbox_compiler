@@ -255,6 +255,10 @@ impl ModuleInternal for DlModule {
     fn get_signature(&self, fn_id: FunctionIndex) -> &Signature {
         self.module_data.get_signature(fn_id)
     }
+
+    fn get_signatures(&self) -> &[Signature] {
+        self.module_data.signatures()
+    }
 }
 
 fn is_undefined_symbol(e: &std::io::Error) -> bool {
