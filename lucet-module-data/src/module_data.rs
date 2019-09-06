@@ -7,7 +7,7 @@ use crate::{
     types::Signature,
     Error,
 };
-use minisign::SignatureBones;
+// use minisign::SignatureBones;
 use serde::{Deserialize, Serialize};
 
 /// The metadata (and some data) for a Lucet module.
@@ -31,7 +31,7 @@ pub struct ModuleData<'a> {
     #[serde(borrow)]
     export_functions: Vec<ExportFunction<'a>>,
     signatures: Vec<Signature>,
-    module_signature: Vec<u8>,
+    // module_signature: Vec<u8>,
 }
 
 impl<'a> ModuleData<'a> {
@@ -43,7 +43,7 @@ impl<'a> ModuleData<'a> {
         export_functions: Vec<ExportFunction<'a>>,
         signatures: Vec<Signature>,
     ) -> Self {
-        let module_signature = vec![0u8; SignatureBones::BYTES];
+        // let module_signature = vec![0u8; SignatureBones::BYTES];
         Self {
             linear_memory,
             globals_spec,
@@ -51,7 +51,7 @@ impl<'a> ModuleData<'a> {
             import_functions,
             export_functions,
             signatures,
-            module_signature,
+            // module_signature,
         }
     }
 
@@ -108,26 +108,29 @@ impl<'a> ModuleData<'a> {
     }
 
     pub fn get_module_signature(&self) -> &[u8] {
-        &self.module_signature
+        panic!("No signature checks in lucet-wasi");
+        // &self.module_signature
     }
 
     pub fn patch_module_signature(
-        module_data_bin: &'a [u8],
-        module_signature: &[u8],
+        _module_data_bin: &'a [u8],
+        _module_signature: &[u8],
     ) -> Result<Vec<u8>, Error> {
-        assert_eq!(module_signature.len(), SignatureBones::BYTES);
-        let mut module_data = Self::deserialize(module_data_bin)?;
-        module_data
-            .module_signature
-            .copy_from_slice(module_signature);
-        let patched_module_data_bin = module_data.serialize()?;
-        assert_eq!(patched_module_data_bin.len(), module_data_bin.len());
-        Ok(patched_module_data_bin)
+        panic!("No signature checks in lucet-wasi");
+        // assert_eq!(module_signature.len(), SignatureBones::BYTES);
+        // let mut module_data = Self::deserialize(module_data_bin)?;
+        // module_data
+        //     .module_signature
+        //     .copy_from_slice(module_signature);
+        // let patched_module_data_bin = module_data.serialize()?;
+        // assert_eq!(patched_module_data_bin.len(), module_data_bin.len());
+        // Ok(patched_module_data_bin)
     }
 
-    pub fn clear_module_signature(module_data_bin: &'a [u8]) -> Result<Vec<u8>, Error> {
-        let module_signature = vec![0u8; SignatureBones::BYTES];
-        Self::patch_module_signature(module_data_bin, &module_signature)
+    pub fn clear_module_signature(_module_data_bin: &'a [u8]) -> Result<Vec<u8>, Error> {
+        panic!("No signature checks in lucet-wasi");
+        // let module_signature = vec![0u8; SignatureBones::BYTES];
+        // Self::patch_module_signature(module_data_bin, &module_signature)
     }
 
     /// Serialize to [`bincode`](https://github.com/TyOverby/bincode).

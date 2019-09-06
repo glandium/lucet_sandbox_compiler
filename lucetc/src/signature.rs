@@ -1,5 +1,5 @@
 use failure::*;
-use lucet_module_data::ModuleSignature;
+// use lucet_module_data::ModuleSignature;
 pub use minisign::{KeyPair, PublicKey, SecretKey, SignatureBones, SignatureBox};
 use std::fs::File;
 use std::io::{Cursor, Read, Write};
@@ -74,6 +74,7 @@ pub fn verify_source_code(
 }
 
 // Sign the compiled code
-pub fn sign_module<P: AsRef<Path>>(path: P, sk: &SecretKey) -> Result<(), Error> {
-    ModuleSignature::sign(path, sk).map_err(|e| e.into())
+pub fn sign_module<P: AsRef<Path>>(_path: P, _sk: &SecretKey) -> Result<(), Error> {
+    panic!("No signature checks in lucet-wasi");
+    // ModuleSignature::sign(path, sk).map_err(|e| e.into())
 }

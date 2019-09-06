@@ -3,8 +3,8 @@ use crate::module::{AddrDetails, GlobalSpec, HeapSpec, Module, ModuleInternal, T
 use libc::c_void;
 use libloading::{Library, Symbol};
 use lucet_module_data::{
-    FunctionHandle, FunctionIndex, FunctionPointer, FunctionSpec, ModuleData, ModuleSignature,
-    PublicKey, Signature,
+    FunctionHandle, FunctionIndex, FunctionPointer, FunctionSpec, ModuleData, /* ModuleSignature,
+    PublicKey, */ Signature,
 };
 use std::ffi::CStr;
 use std::mem;
@@ -33,18 +33,18 @@ unsafe impl Sync for DlModule {}
 impl DlModule {
     /// Create a module, loading code from a shared object on the filesystem.
     pub fn load<P: AsRef<Path>>(so_path: P) -> Result<Arc<Self>, Error> {
-        Self::load_and_maybe_verify(so_path, None)
+        Self::load_and_maybe_verify(so_path)
     }
 
-    /// Create a module, loading code from a shared object on the filesystem
-    /// and verifying it using a public key if one has been supplied.
-    pub fn load_and_verify<P: AsRef<Path>>(so_path: P, pk: PublicKey) -> Result<Arc<Self>, Error> {
-        Self::load_and_maybe_verify(so_path, Some(pk))
-    }
+    // /// Create a module, loading code from a shared object on the filesystem
+    // /// and verifying it using a public key if one has been supplied.
+    // pub fn load_and_verify<P: AsRef<Path>>(so_path: P, pk: PublicKey) -> Result<Arc<Self>, Error> {
+    //     Self::load_and_maybe_verify(so_path, Some(pk))
+    // }
 
     fn load_and_maybe_verify<P: AsRef<Path>>(
         so_path: P,
-        pk: Option<PublicKey>,
+        // pk: Option<PublicKey>,
     ) -> Result<Arc<Self>, Error> {
         // Load the dynamic library. The undefined symbols corresponding to the lucet_syscall_
         // functions will be provided by the current executable.  We trust our wasm->dylib compiler
@@ -81,9 +81,9 @@ impl DlModule {
 
         // If a public key has been provided, verify the module signature
         // The TOCTOU issue is unavoidable without reimplenting `dlopen(3)`
-        if let Some(pk) = pk {
-            ModuleSignature::verify(so_path, &pk, &module_data)?;
-        }
+        // if let Some(pk) = pk {
+        //     ModuleSignature::verify(so_path, &pk, &module_data)?;
+        // }
 
         let fbase = if let Some(dli) = dladdr(*module_data_ptr as *const c_void) {
             dli.dli_fbase
