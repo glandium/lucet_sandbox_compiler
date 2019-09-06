@@ -11,15 +11,12 @@ use nix::sys::mman::{madvise, mmap, munmap, MapFlags, MmapAdvise, ProtFlags};
 use std::ptr;
 use std::sync::{Arc, Mutex, Weak};
 
-use libc::{off_t, size_t, ssize_t};
-use std::convert::TryFrom;
-use std::os::unix::io::RawFd;
-
 /// A [`Region`](trait.Region.html) backed by `mmap`.
 pub struct MmapRegion {
     capacity: usize,
     freelist: Mutex<Vec<Slot>>,
     limits: Limits,
+    min_heap_alignment: usize,
 }
 
 impl Region for MmapRegion {}
@@ -228,59 +225,6 @@ impl RegionCreate for MmapRegion {
     }
 }
 
-#[allow(unused_must_use)]
-unsafe fn mmap_aligned(
-    addr: *mut c_void,
-    length: size_t,
-    prot: ProtFlags,
-    flags: MapFlags,
-    fd: RawFd,
-    offset: off_t,
-    align_bits: size_t,
-    align_offset: ssize_t,
-) -> Result<*mut c_void, Error> {
-    let padding = (1 as usize) << align_bits;
-    let request_size = length + padding;
-
-    let ret = mmap(addr, request_size, prot, flags, fd, offset)?;
-    let unrounded = ret as usize;
-
-    let rounded_temp = (unrounded + (padding - 1)) & !(padding - 1);
-    let rounded = if align_offset < 0 {
-        rounded_temp - usize::try_from(-align_offset).unwrap()
-    } else {
-        rounded_temp + usize::try_from(align_offset).unwrap()
-    };
-
-    //Sanity check
-    if rounded < unrounded || (rounded + (length - 1)) > (unrounded + (request_size - 1)) {
-        munmap(ret, request_size);
-        return Err(Error::Unsupported("Could not align memory".to_string()));
-    }
-
-    {
-        let unused_front = rounded - unrounded;
-        if unused_front != 0 {
-            if munmap(unrounded as *mut c_void, unused_front).is_err() {
-                munmap(ret, request_size);
-                return Err(Error::Unsupported("Could not align memory".to_string()));
-            }
-        }
-    }
-
-    {
-        let unused_back = (unrounded + (request_size - 1)) - (rounded + (length - 1));
-        if unused_back != 0 {
-            if munmap((rounded + length) as *mut c_void, unused_back).is_err() {
-                munmap(ret, request_size);
-                return Err(Error::Unsupported("Could not align memory".to_string()));
-            }
-        }
-    }
-
-    return Ok(rounded as *mut c_void);
-}
-
 impl MmapRegion {
     /// Create a new `MmapRegion` that can support a given number instances, each subject to the
     /// same runtime limits.
@@ -298,6 +242,38 @@ impl MmapRegion {
             capacity: instance_capacity,
             freelist: Mutex::new(Vec::with_capacity(instance_capacity)),
             limits: limits.clone(),
+            min_heap_alignment: 0, // No constaints on heap alignment by default
+        });
+        {
+            let mut freelist = region.freelist.lock().unwrap();
+            for _ in 0..instance_capacity {
+                freelist.push(MmapRegion::create_slot(&region)?);
+            }
+        }
+
+        Ok(region)
+    }
+
+    pub fn create_aligned(
+        instance_capacity: usize,
+        limits: &Limits,
+        heap_aligment: usize,
+    ) -> Result<Arc<Self>, Error> {
+        assert!(
+            SIGSTKSZ % host_page_size() == 0,
+            "signal stack size is a multiple of host page size"
+        );
+        limits.validate()?;
+
+        if heap_aligment % 2 != 0 {
+            return Err(Error::InvalidArgument("heap_aligment must be a power of 2"));
+        }
+
+        let region = Arc::new(MmapRegion {
+            capacity: instance_capacity,
+            freelist: Mutex::new(Vec::with_capacity(instance_capacity)),
+            limits: limits.clone(),
+            min_heap_alignment: heap_aligment,
         });
         {
             let mut freelist = region.freelist.lock().unwrap();
@@ -311,17 +287,27 @@ impl MmapRegion {
 
     fn create_slot(region: &Arc<MmapRegion>) -> Result<Slot, Error> {
         // get the chunk of virtual memory that the `Slot` will manage
-        let mem = unsafe {
-            mmap_aligned(
-                ptr::null_mut(),
-                region.limits.total_memory_size(),
-                ProtFlags::PROT_NONE,
-                MapFlags::MAP_ANON | MapFlags::MAP_PRIVATE,
-                0,
-                0,
-                32,                                 /* align to 32 bits */
-                -(instance_heap_offset() as isize), /* put the stuff before the "heap" prior to alignment */
-            )?
+        let mem = if region.min_heap_alignment == 0 {
+            unsafe {
+                mmap(
+                    ptr::null_mut(),
+                    region.limits.total_memory_size(),
+                    ProtFlags::PROT_NONE,
+                    MapFlags::MAP_ANON | MapFlags::MAP_PRIVATE,
+                    0,
+                    0,
+                )?
+            }
+        } else {
+            unsafe {
+                mmap_aligned(
+                    region.limits.total_memory_size(),
+                    ProtFlags::PROT_NONE,
+                    MapFlags::MAP_ANON | MapFlags::MAP_PRIVATE,
+                    region.min_heap_alignment, // requested alignment
+                    instance_heap_offset(),    // offset that must be aligned
+                )?
+            }
         };
 
         // set the first part of the memory to read/write so that the `Instance` can be stored there
@@ -360,6 +346,68 @@ impl MmapRegion {
         let res = unsafe { munmap(slot.start, slot.limits.total_memory_size()) };
         res.expect("munmap succeeded");
     }
+}
+
+
+// Note alignment must be a power of 2
+unsafe fn mmap_aligned(
+    requested_length: usize,
+    prot: ProtFlags,
+    flags: MapFlags,
+    alignment: usize,
+    alignment_offset: usize,
+) -> Result<*mut c_void, Error> {
+    let addr = ptr::null_mut();
+    let fd = 0;
+    let offset = 0;
+
+    let padded_length = requested_length + alignment + alignment_offset;
+    let unaligned = mmap(addr, padded_length, prot, flags, fd, offset)? as usize;
+
+    // Round up the next address that has addr % alignment = 0
+    let aligned_nonoffset = (unaligned + (alignment - 1)) & !(alignment - 1);
+
+    // Currently offset 0 is aligned according to alignment
+    // Alignment needs to be enforced at the given offset
+    let aligned = if aligned_nonoffset - alignment_offset >= unaligned {
+        aligned_nonoffset - alignment_offset
+    } else {
+        aligned_nonoffset - alignment_offset + alignment
+    };
+
+    //Sanity check
+    if aligned < unaligned
+        || (aligned + (requested_length - 1)) > (unaligned + (padded_length - 1))
+        || (aligned + alignment_offset) % alignment != 0
+    {
+        // explicitly ignore failures now, as this is just a best-effort clean up after the last fail
+        let _ = munmap(unaligned as *mut c_void, padded_length);
+        return Err(Error::Unsupported("Could not align memory".to_string()));
+    }
+
+    {
+        let unused_front = aligned - unaligned;
+        if unused_front != 0 {
+            if munmap(unaligned as *mut c_void, unused_front).is_err() {
+                // explicitly ignore failures now, as this is just a best-effort clean up after the last fail
+                let _ = munmap(unaligned as *mut c_void, padded_length);
+                return Err(Error::Unsupported("Could not align memory".to_string()));
+            }
+        }
+    }
+
+    {
+        let unused_back = (unaligned + (padded_length - 1)) - (aligned + (requested_length - 1));
+        if unused_back != 0 {
+            if munmap((aligned + requested_length) as *mut c_void, unused_back).is_err() {
+                // explicitly ignore failures now, as this is just a best-effort clean up after the last fail
+                let _ = munmap(unaligned as *mut c_void, padded_length);
+                return Err(Error::Unsupported("Could not align memory".to_string()));
+            }
+        }
+    }
+
+    return Ok(aligned as *mut c_void);
 }
 
 // TODO: remove this once `nix` PR https://github.com/nix-rust/nix/pull/991 is merged
