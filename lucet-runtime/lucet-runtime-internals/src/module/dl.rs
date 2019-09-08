@@ -50,8 +50,8 @@ impl DlModule {
         // functions will be provided by the current executable.  We trust our wasm->dylib compiler
         // to make sure these function calls are the way the dylib can touch memory outside of its
         // stack and heap.
-        let abs_so_path = so_path.as_ref().canonicalize().map_err(Error::DlError)?;
-        let lib = Library::new(abs_so_path.as_os_str()).map_err(Error::DlError)?;
+        // let abs_so_path = so_path.as_ref().canonicalize().map_err(Error::DlError)?;
+        let lib = Library::new(so_path.as_ref().as_os_str()).map_err(Error::DlError)?;
 
         let module_data_ptr = unsafe {
             lib.get::<*const u8>(b"lucet_module_data").map_err(|e| {
