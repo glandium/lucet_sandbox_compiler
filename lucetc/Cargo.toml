@@ -18,13 +18,13 @@ path = "src/main.rs"
 
 [dependencies]
 bincode = "~1.0.1"
-cranelift-codegen = { path = "../cranelift/cranelift-codegen", version = "0.31.0" }
-cranelift-entity = { path = "../cranelift/cranelift-entity", version = "0.31.0" }
-cranelift-native = { path = "../cranelift/cranelift-native", version = "0.31.0" }
-cranelift-frontend = { path = "../cranelift/cranelift-frontend", version = "0.31.0" }
-cranelift-module = { path = "../cranelift/cranelift-module", version = "0.31.0" }
-cranelift-faerie = { path = "../cranelift/cranelift-faerie", version = "0.31.0" }
-cranelift-wasm = { path = "../cranelift/cranelift-wasm", version = "0.31.0" }
+cranelift-codegen = { git="https://github.com/CraneStation/Cranelift", rev="72b97fcb398537c6bb3ab73c45c428652321cbb6" }
+cranelift-entity = { git="https://github.com/CraneStation/Cranelift", rev="72b97fcb398537c6bb3ab73c45c428652321cbb6" }
+cranelift-native = { git="https://github.com/CraneStation/Cranelift", rev="72b97fcb398537c6bb3ab73c45c428652321cbb6" }
+cranelift-frontend = { git="https://github.com/CraneStation/Cranelift", rev="72b97fcb398537c6bb3ab73c45c428652321cbb6" }
+cranelift-module = { git="https://github.com/CraneStation/Cranelift", rev="72b97fcb398537c6bb3ab73c45c428652321cbb6" }
+cranelift-faerie = { git="https://github.com/CraneStation/Cranelift", rev="72b97fcb398537c6bb3ab73c45c428652321cbb6" }
+cranelift-wasm = { git="https://github.com/CraneStation/Cranelift", rev="72b97fcb398537c6bb3ab73c45c428652321cbb6" }
 target-lexicon = "0.3"
 lucet-module-data = { path = "../lucet-module-data", version = "0.1.1" }
 wasmparser = "0.23"
