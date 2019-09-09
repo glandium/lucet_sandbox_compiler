@@ -130,9 +130,10 @@ impl<'a> ModuleInfo<'a> {
         sig: ir::Signature,
     ) -> (UniqueFuncIndex, SignatureIndex) {
         let new_sigidx = SignatureIndex::from_u32(self.signature_mapping.len() as u32);
-        self.declare_signature(sig);
+        self.declare_signature(sig).expect("declaring signature");
         let new_funcidx = UniqueFuncIndex::from_u32(self.functions.len() as u32);
-        self.declare_func_type(new_sigidx);
+        self.declare_func_type(new_sigidx)
+            .expect("declaring func type");
         (new_funcidx, new_sigidx)
     }
 }

@@ -27,7 +27,7 @@ cranelift-faerie = { git="https://github.com/CraneStation/Cranelift", rev="72b97
 cranelift-wasm = { git="https://github.com/CraneStation/Cranelift", rev="72b97fcb398537c6bb3ab73c45c428652321cbb6" }
 target-lexicon = "0.3"
 lucet-module-data = { path = "../lucet-module-data", version = "0.1.1" }
-wasmparser = "0.23"
+wasmparser = "0.36.0"
 clap="2.32"
 log = "0.4"
 env_logger = "0.6"
